@@ -34,14 +34,14 @@ class Config:
     K: int = 100  # Number of time steps
 
     # Training parameters
-    batch_size: int = 256  # Number of trajectories per episode
-    num_episodes: int = 400  # Total training episodes
-    learning_rate: float = 1e-4
+    batch_size: int = 64  # Number of trajectories per episode
+    num_episodes: int = 1000  # Total training episodes
+    learning_rate: float = 1e-3
     hidden_dim: int = 128
 
     # Initial state distribution
     x0_mean: float = 0.0
-    x0_std: float = 3
+    x0_std: float = 0.5
 
     @property
     def dt(self) -> float:
@@ -219,8 +219,8 @@ def compute_policy(
     # Select the appropriate switching intensity based on current regime
     pi_switch = torch.where(i == 0, pi_01, pi_10)
 
-    # Clamp to prevent numerical issues
-    pi_switch = pi_switch.clamp(min=1e-10, max=100.0)
+    # Clamp to prevent numerical blow-up in simulation
+    pi_switch = pi_switch.clamp(min=1e-10, max=20.0)
 
     # Compute entropy term: R(π, i) = Σ_{j≠i} (π_ij - π_ij * log(π_ij))
     entropy = pi_switch - pi_switch * torch.log(pi_switch)
@@ -407,7 +407,7 @@ def plot_results(
 
     ax1.set_xlabel('Episode')
     ax1.set_ylabel('Loss')
-    ax1.set_title('Training Loss (Martingale Orthogonality)')
+    ax1.set_title('Training Loss')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
@@ -427,10 +427,9 @@ def plot_results(
         pi_01 = torch.exp((values[:, 1] - config.g01 - values[:, 0]) / config.temperature)
         pi_10 = torch.exp((values[:, 0] - config.g10 - values[:, 1]) / config.temperature)
 
-        # Convert to "probability" for visualization (similar to paper)
-        # Using sigmoid-like transformation: p = pi / (1 + pi)
-        p_01 = (pi_01 / (1 + pi_01)).cpu().numpy()
-        p_10 = (pi_10 / (1 + pi_10)).cpu().numpy()
+        # Convert to switch probability over one time step: 1 - exp(-π Δt)
+        p_01 = (1.0 - torch.exp(-pi_01 * config.dt)).cpu().numpy()
+        p_10 = (1.0 - torch.exp(-pi_10 * config.dt)).cpu().numpy()
 
     x_np = x_range.cpu().numpy()
 
