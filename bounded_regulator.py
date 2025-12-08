@@ -37,11 +37,13 @@ class Config:
     batch_size: int = 64  # Number of trajectories per episode
     num_episodes: int = 1000  # Total training episodes
     learning_rate: float = 1e-3
+    step_nu: float = 0.2  # Exponent ν for decaying step size (Alg. 1 / Thm 5.4)
+    step_offset: float = 1.0  # B shift to keep early steps finite
     hidden_dim: int = 128
 
     # Initial state distribution
     x0_mean: float = 0.0
-    x0_std: float = 0.5
+    x0_std: float = 2
 
     @property
     def dt(self) -> float:
@@ -363,6 +365,11 @@ def train(config: Config, device: torch.device) -> tuple[ValueNetwork, list[floa
     losses = []
 
     for episode in range(config.num_episodes):
+        # Episode-dependent step size: α(i) = A / (i + B)^ν
+        alpha = config.learning_rate / ((episode + 1 + config.step_offset) ** config.step_nu)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = alpha
+
         # Simulate trajectories
         value_net.eval()
         with torch.no_grad():
