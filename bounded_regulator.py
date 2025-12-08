@@ -34,14 +34,14 @@ class Config:
     K: int = 100  # Number of time steps
 
     # Training parameters
-    batch_size: int = 64  # Number of trajectories per episode
-    num_episodes: int = 1000  # Total training episodes
-    learning_rate: float = 1e-3
+    batch_size: int = 256  # Number of trajectories per episode
+    num_episodes: int = 400  # Total training episodes
+    learning_rate: float = 1e-4
     hidden_dim: int = 128
 
     # Initial state distribution
     x0_mean: float = 0.0
-    x0_std: float = 0.5
+    x0_std: float = 3
 
     @property
     def dt(self) -> float:
@@ -298,10 +298,11 @@ def compute_martingale_loss(
     config: Config,
 ) -> torch.Tensor:
     """
-    Compute the martingale-based loss for policy evaluation (eq 5.11).
+    Compute the score-weighted martingale loss (Algorithm 1, eqs. 5.9–5.11).
 
-    Δξ_k = v(t_{k+1}, X_{k+1}, I_{k+1}) - v(t_k, X_k, I_k)
-           + (f(X_k, I_k) + λ * R(π_k, I_k)) * Δt - g_{I_k, I_{k+1}}
+    Δ_k is computed without tracking gradients, then multiplied by the current
+    value estimate v(t_k, X_k, I_k) with gradients on. The loss drives
+    E[Δ_k * v(t_k, X_k, I_k)] → 0.
     """
     times = trajectory['times']
     states = trajectory['states']
@@ -312,33 +313,44 @@ def compute_martingale_loss(
     batch_size, num_steps = times.shape[0], times.shape[1] - 1
     dt = config.dt
 
-    # Compute values at all time points
-    t_flat = times.reshape(-1)
-    x_flat = states.reshape(-1)
-    i_flat = regimes.reshape(-1)
+    # Compute Δ_k with no gradients (detach).
+    with torch.no_grad():
+        t_flat = times.reshape(-1)
+        x_flat = states.reshape(-1)
+        i_flat = regimes.reshape(-1)
 
-    all_values = value_net(t_flat, x_flat)
-    v_flat = all_values.gather(1, i_flat.unsqueeze(1)).squeeze(1)
-    v = v_flat.reshape(batch_size, num_steps + 1)
+        all_values = value_net(t_flat, x_flat)
+        v_flat = all_values.gather(1, i_flat.unsqueeze(1)).squeeze(1)
+        v_detached = v_flat.reshape(batch_size, num_steps + 1)
 
-    # Compute entropy term with gradients
-    entropies = []
-    for k in range(num_steps):
-        t_k = times[:, k]
-        x_k = states[:, k]
-        i_k = regimes[:, k]
-        _, entropy = compute_policy(value_net, t_k, x_k, i_k, config)
-        entropies.append(entropy)
-    entropies = torch.stack(entropies, dim=1)
+        entropies = []
+        for k in range(num_steps):
+            t_k = times[:, k]
+            x_k = states[:, k]
+            i_k = regimes[:, k]
+            _, entropy = compute_policy(value_net, t_k, x_k, i_k, config)
+            entropies.append(entropy)
+        entropies = torch.stack(entropies, dim=1)
 
-    # Martingale increment
-    v_next = v[:, 1:]
-    v_curr = v[:, :-1]
+        delta_detached = (
+            v_detached[:, 1:]
+            - v_detached[:, :-1]
+            + (rewards + config.temperature * entropies) * dt
+            - switch_costs
+        ).detach()
 
-    delta = v_next - v_curr + (rewards + config.temperature * entropies) * dt - switch_costs
+    # Compute v(t_k, X_k, I_k) with gradients.
+    t_curr = times[:, :-1].reshape(-1)
+    x_curr = states[:, :-1].reshape(-1)
+    i_curr = regimes[:, :-1].reshape(-1)
 
-    # MSE loss on martingale increments
-    loss = delta.pow(2).mean()
+    v_curr_all = value_net(t_curr, x_curr)
+    v_curr = v_curr_all.gather(1, i_curr.unsqueeze(1)).squeeze(1)
+    v_curr = v_curr.reshape(batch_size, num_steps)
+
+    # Score-weighted orthogonality loss (no square).
+    # Gradient descent on -E[v * Δ] replicates the ascent update in eq. (5.9).
+    loss = -(v_curr * delta_detached).mean()
 
     return loss
 
@@ -395,7 +407,7 @@ def plot_results(
 
     ax1.set_xlabel('Episode')
     ax1.set_ylabel('Loss')
-    ax1.set_title('Training Loss (MSE)')
+    ax1.set_title('Training Loss (Martingale Orthogonality)')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
