@@ -9,5 +9,7 @@ dependencies = [
     "numpy>=2.3.5",
     "torch>=2.9.1",
     "ruff>=0.14.8",
+    "requests>=2.32.5",
+    "pandas>=2.3.3",
 ]
 
