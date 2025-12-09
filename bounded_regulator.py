@@ -41,7 +41,7 @@ class Config:
 
     # Initial state distribution
     x0_mean: float = 0.0
-    x0_std: float = 0.5
+    x0_std: float = 2.0
 
     @property
     def dt(self) -> float:
