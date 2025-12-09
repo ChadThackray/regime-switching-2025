@@ -1,22 +1,41 @@
 """
-Fetch BTC/ETH minutely data and estimate OU parameters.
+Fetch BTC/ETH data and estimate OU parameters.
 """
 
 import time
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import requests
 
 
-def fetch_binance_klines(symbol: str, interval: str, limit: int = 1000) -> pd.DataFrame:
-    """Fetch klines (candlestick) data from Binance."""
+def fetch_binance_klines(
+    symbol: str,
+    interval: str,
+    limit: int = 1000,
+    end_time: datetime | None = None,
+) -> pd.DataFrame:
+    """Fetch klines (candlestick) data from Binance.
+
+    Args:
+        symbol: Trading pair symbol (e.g., "BTCUSDT")
+        interval: Candle interval (e.g., "1m", "1h", "1d")
+        limit: Max number of candles (up to 1000)
+        end_time: Optional end time for the query
+
+    Returns:
+        DataFrame with open_time and close columns
+    """
     url = "https://api.binance.com/api/v3/klines"
-    params = {
+    params: dict = {
         "symbol": symbol,
         "interval": interval,
         "limit": limit,
     }
+    if end_time is not None:
+        params["endTime"] = int(end_time.timestamp() * 1000)
+
     response = requests.get(url, params=params)
     response.raise_for_status()
     data = response.json()
@@ -32,6 +51,88 @@ def fetch_binance_klines(symbol: str, interval: str, limit: int = 1000) -> pd.Da
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
     df["close"] = df["close"].astype(float)
     return df[["open_time", "close"]]
+
+
+def fetch_historical_klines(
+    symbol: str,
+    interval: str,
+    days: int,
+    end_time: datetime | None = None,
+) -> pd.DataFrame:
+    """Fetch historical klines with pagination to overcome 1000-candle limit.
+
+    Args:
+        symbol: Trading pair symbol (e.g., "BTCUSDT")
+        interval: Candle interval (e.g., "1h" for hourly)
+        days: Number of days of history to fetch
+        end_time: Optional end time (defaults to now)
+
+    Returns:
+        DataFrame with open_time and close columns, sorted chronologically
+    """
+    if end_time is None:
+        end_time = datetime.now()
+
+    # Calculate candles per day based on interval
+    interval_minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+    minutes_per_candle = interval_minutes.get(interval, 60)
+    candles_per_day = 1440 // minutes_per_candle
+    total_candles_needed = days * candles_per_day
+
+    all_data = []
+    current_end = end_time
+
+    while len(all_data) < total_candles_needed:
+        batch = fetch_binance_klines(symbol, interval, limit=1000, end_time=current_end)
+        if batch.empty:
+            break
+        all_data.append(batch)
+
+        # Move end_time back to before the earliest candle in this batch
+        current_end = batch["open_time"].min() - timedelta(milliseconds=1)
+        time.sleep(0.1)  # Rate limiting
+
+        # Safety check to prevent infinite loops
+        if len(all_data) > 10:
+            break
+
+    if not all_data:
+        return pd.DataFrame(columns=["open_time", "close"])
+
+    combined = pd.concat(all_data, ignore_index=True)
+    combined = combined.drop_duplicates(subset=["open_time"])
+    combined = combined.sort_values("open_time").reset_index(drop=True)
+
+    # Trim to requested number of days
+    return combined.tail(total_candles_needed).reset_index(drop=True)
+
+
+def fetch_btc_eth_history(
+    days: int = 90,
+    interval: str = "1h",
+) -> pd.DataFrame:
+    """Fetch aligned BTC and ETH historical data.
+
+    Args:
+        days: Number of days of history
+        interval: Candle interval
+
+    Returns:
+        DataFrame with open_time, close_btc, close_eth, log_ratio columns
+    """
+    print(f"Fetching {days} days of {interval} data for BTC and ETH...")
+
+    btc = fetch_historical_klines("BTCUSDT", interval, days)
+    eth = fetch_historical_klines("ETHUSDT", interval, days)
+
+    # Merge on time
+    df = btc.merge(eth, on="open_time", suffixes=("_btc", "_eth"))
+    df["log_ratio"] = np.log(df["close_btc"] / df["close_eth"])
+
+    print(f"Got {len(df)} data points")
+    print(f"Time range: {df['open_time'].iloc[0]} to {df['open_time'].iloc[-1]}")
+
+    return df
 
 
 def estimate_ou_parameters(spread: np.ndarray, dt: float) -> dict:
