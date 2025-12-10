@@ -110,20 +110,22 @@ def fetch_historical_klines(
 def fetch_btc_eth_history(
     days: int = 90,
     interval: str = "1h",
+    end_time: datetime | None = None,
 ) -> pd.DataFrame:
     """Fetch aligned BTC and ETH historical data.
 
     Args:
         days: Number of days of history
         interval: Candle interval
+        end_time: End time for data (defaults to now)
 
     Returns:
         DataFrame with open_time, close_btc, close_eth, log_ratio columns
     """
     print(f"Fetching {days} days of {interval} data for BTC and ETH...")
 
-    btc = fetch_historical_klines("BTCUSDT", interval, days)
-    eth = fetch_historical_klines("ETHUSDT", interval, days)
+    btc = fetch_historical_klines("BTCUSDT", interval, days, end_time)
+    eth = fetch_historical_klines("ETHUSDT", interval, days, end_time)
 
     # Merge on time
     df = btc.merge(eth, on="open_time", suffixes=("_btc", "_eth"))

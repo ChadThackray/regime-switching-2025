@@ -6,6 +6,7 @@ Compares RL-learned thresholds vs naive fixed-threshold strategies.
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,6 +43,7 @@ class BacktestConfig:
     total_days: int = 90
     interval: str = "1h"
     training_episodes: int = 500
+    start_date: datetime | None = None  # If None, ends at now
 
 
 def create_dynamics_fn(theta: float, spread_scale: float):
@@ -232,8 +234,16 @@ def run_backtest(config: BacktestConfig) -> dict:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # Calculate end_time from start_date
+    if config.start_date is not None:
+        end_time = config.start_date + timedelta(days=config.total_days)
+    else:
+        end_time = None  # Will default to now
+
     # Fetch historical data
-    data = fetch_btc_eth_history(days=config.total_days, interval=config.interval)
+    data = fetch_btc_eth_history(
+        days=config.total_days, interval=config.interval, end_time=end_time
+    )
 
     # Calculate candles per day
     candles_per_day = 24 if config.interval == "1h" else 1440
@@ -407,10 +417,10 @@ def calculate_metrics(results: pd.DataFrame) -> dict:
 
 def plot_results(results: dict) -> None:
     """Plot backtest results."""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig = plt.figure(figsize=(14, 10))
 
-    # Plot 1: Cumulative PnL comparison
-    ax1 = axes[0, 0]
+    # Plot 1: Cumulative PnL comparison (top, full width)
+    ax1 = fig.add_subplot(2, 1, 1)
     for name, df in [
         ("RL", results["rl"]),
         ("Naive ±1σ", results["naive_1sigma"]),
@@ -425,22 +435,10 @@ def plot_results(results: dict) -> None:
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    # Plot 2: Threshold evolution
-    ax2 = axes[0, 1]
-    thresholds = results["thresholds"]
-    ax2.plot(thresholds["period"], thresholds["long_threshold"], "b-", label="Long Threshold")
-    ax2.plot(thresholds["period"], thresholds["short_threshold"], "r-", label="Short Threshold")
-    ax2.axhline(y=0, color="black", linestyle="--", alpha=0.5)
-    ax2.set_xlabel("Trading Period")
-    ax2.set_ylabel("Normalized Threshold")
-    ax2.set_title("RL Threshold Evolution")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    # Plot 3: Spread with RL signals
-    ax3 = axes[1, 0]
+    # Plot 2: Spread with RL signals (bottom left)
+    ax3 = fig.add_subplot(2, 2, 3)
     rl_df = results["rl"]
-    ax3.plot(rl_df["time"], rl_df["x_normalized"], "gray", alpha=0.5, label="Spread")
+    ax3.plot(rl_df["time"], rl_df["spread"], "gray", alpha=0.5, label="Spread")
 
     # Color by position
     for pos, color, label in [(0, "blue", "Long"), (1, "red", "Short"), (2, "green", "Flat")]:
@@ -448,7 +446,7 @@ def plot_results(results: dict) -> None:
         if mask.any():
             ax3.scatter(
                 rl_df.loc[mask, "time"],
-                rl_df.loc[mask, "x_normalized"],
+                rl_df.loc[mask, "spread"],
                 c=color,
                 s=1,
                 alpha=0.5,
@@ -456,13 +454,13 @@ def plot_results(results: dict) -> None:
             )
 
     ax3.set_xlabel("Time")
-    ax3.set_ylabel("Normalized Spread  ((log(BTC/ETH) - μ) / scale)")
+    ax3.set_ylabel("log(BTC/ETH)")
     ax3.set_title("RL Strategy Positions")
     ax3.legend()
     ax3.grid(True, alpha=0.3)
 
-    # Plot 4: Performance metrics table
-    ax4 = axes[1, 1]
+    # Plot 3: Performance metrics table (bottom right)
+    ax4 = fig.add_subplot(2, 2, 4)
     ax4.axis("off")
 
     metrics_data = []
@@ -499,18 +497,32 @@ def main() -> None:
     parser.add_argument("--lookback", type=int, default=3, help="Lookback days for OU estimation")
     parser.add_argument("--episodes", type=int, default=500, help="Training episodes per period")
     parser.add_argument("--no-plot", action="store_true", help="Skip plotting")
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Start date for backtest (YYYY-MM-DD). If not specified, ends at now.",
+    )
     args = parser.parse_args()
+
+    # Parse start date
+    start_date = None
+    if args.start_date:
+        start_date = datetime.strptime(args.start_date, "%Y-%m-%d")
 
     config = BacktestConfig(
         lookback_days=args.lookback,
         total_days=args.days,
         training_episodes=args.episodes,
+        start_date=start_date,
     )
 
     print("Walk-Forward Backtest: BTC/ETH Pairs Trading")
     print(f"  Lookback: {config.lookback_days} days")
     print(f"  Trading period: {config.trading_period_days} day")
     print(f"  Total days: {config.total_days}")
+    if config.start_date:
+        print(f"  Start date: {config.start_date.strftime('%Y-%m-%d')}")
     print(f"  Training episodes: {config.training_episodes}")
     print()
 
