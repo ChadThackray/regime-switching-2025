@@ -42,7 +42,6 @@ class BacktestConfig:
     total_days: int = 90
     interval: str = "1h"
     training_episodes: int = 500
-    fee: float = FEE
 
 
 def create_dynamics_fn(theta: float, spread_scale: float):
@@ -128,14 +127,9 @@ def extract_thresholds(
     }
 
 
-def calculate_switching_cost(from_regime: int, to_regime: int, fee: float) -> float:
+def calculate_switching_cost(from_regime: int, to_regime: int) -> float:
     """Calculate cost of switching between regimes."""
-    if from_regime == to_regime:
-        return 0.0
-    elif from_regime == 2 or to_regime == 2:
-        return 2 * fee  # Enter or exit
-    else:
-        return 4 * fee  # Reverse position
+    return SWITCHING_COSTS[from_regime][to_regime]
 
 
 def simulate_period(
@@ -144,7 +138,6 @@ def simulate_period(
     mu: float,
     initial_position: int,
     initial_spread: float | None,
-    fee: float,
 ) -> tuple[pd.DataFrame, int, float]:
     """Simulate trading for one period using given thresholds.
 
@@ -154,7 +147,6 @@ def simulate_period(
         mu: Equilibrium spread value
         initial_position: Starting regime (0=Long, 1=Short, 2=Flat)
         initial_spread: Spread value from end of previous period (or None)
-        fee: Trading fee per trade
 
     Returns:
         results: DataFrame with per-candle results
@@ -189,7 +181,7 @@ def simulate_period(
             # Flat: no PnL from spread movement
 
         # Calculate switching cost
-        switch_cost = calculate_switching_cost(position, target, fee)
+        switch_cost = calculate_switching_cost(position, target)
 
         results.append(
             {
@@ -334,24 +326,24 @@ def run_backtest(config: BacktestConfig) -> dict:
 
         # Simulate trading for each strategy
         rl_results, positions["rl"], spreads["rl"] = simulate_period(
-            trading_data, rl_thresholds, mu, positions["rl"], spreads["rl"], config.fee
+            trading_data, rl_thresholds, mu, positions["rl"], spreads["rl"]
         )
         all_results["rl"].append(rl_results)
 
         naive_1_results, positions["naive_1sigma"], spreads["naive_1sigma"] = simulate_period(
-            trading_data, naive_1sigma_thresholds, mu, positions["naive_1sigma"], spreads["naive_1sigma"], config.fee
+            trading_data, naive_1sigma_thresholds, mu, positions["naive_1sigma"], spreads["naive_1sigma"]
         )
         all_results["naive_1sigma"].append(naive_1_results)
 
         naive_2_results, positions["naive_2sigma"], spreads["naive_2sigma"] = simulate_period(
-            trading_data, naive_2sigma_thresholds, mu, positions["naive_2sigma"], spreads["naive_2sigma"], config.fee
+            trading_data, naive_2sigma_thresholds, mu, positions["naive_2sigma"], spreads["naive_2sigma"]
         )
         all_results["naive_2sigma"].append(naive_2_results)
 
     # Close final positions (add exit fee if not flat)
     for strategy in ["rl", "naive_1sigma", "naive_2sigma"]:
         if positions[strategy] != 2:  # Not flat
-            exit_fee = 2 * config.fee
+            exit_fee = calculate_switching_cost(positions[strategy], 2)
             # Get last timestamp from results
             last_result = all_results[strategy][-1]
             last_time = last_result["time"].iloc[-1] if not last_result.empty else None
