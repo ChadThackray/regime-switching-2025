@@ -167,6 +167,7 @@ def simulate_period(
 
     for row in prices.itertuples():
         spread = row.log_ratio
+        assert isinstance(spread, float)
         x = (spread - mu) / SPREAD_SCALE
 
         # Determine target position based on thresholds
@@ -206,6 +207,7 @@ def simulate_period(
         position = target
         prev_spread = spread
 
+    assert prev_spread is not None, "prices DataFrame was empty"
     return pd.DataFrame(results), position, prev_spread
 
 
@@ -275,7 +277,7 @@ def run_backtest(config: BacktestConfig) -> dict:
         trading_data = data.iloc[lookback_end:trading_end]
 
         # Estimate OU parameters from lookback window
-        spread = lookback_data["log_ratio"].values
+        spread = lookback_data["log_ratio"].to_numpy()
         dt_hours = 1.0 / 24  # 1 hour in days
         ou_params = estimate_ou_parameters(spread, dt_hours)
 

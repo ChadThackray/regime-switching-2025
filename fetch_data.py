@@ -215,7 +215,7 @@ def main():
     dt_minutes = 1.0
     dt_days = 1.0 / (60 * 24)
 
-    spread = df["log_ratio"].values
+    spread = df["log_ratio"].to_numpy()
 
     # Estimate with daily units
     params = estimate_ou_parameters(spread, dt_days)

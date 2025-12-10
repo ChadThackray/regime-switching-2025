@@ -204,7 +204,11 @@ def save_baseline(losses: list[float], test_values: dict[str, np.ndarray]) -> No
     np.savez(
         baseline_path,
         losses=np.array(losses),
-        **test_values,
+        test_x=test_values["test_x"],
+        v_0=test_values["v_0"],
+        v_1=test_values["v_1"],
+        pi_01=test_values["pi_01"],
+        pi_10=test_values["pi_10"],
     )
     print(f"Baseline saved to {baseline_path}")
 
