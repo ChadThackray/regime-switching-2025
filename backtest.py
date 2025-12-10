@@ -215,13 +215,15 @@ class NaiveStrategy:
     def __init__(self, z_threshold: float = 1.0):
         self.z_threshold = z_threshold
 
-    def get_thresholds(self, sigma: float) -> dict:
-        """Convert z-score threshold to normalized spread thresholds."""
+    def get_thresholds(self, spread_std: float) -> dict:
+        """Convert z-score threshold to normalized spread thresholds.
+
+        Args:
+            spread_std: Standard deviation of spread from lookback window
+        """
         # z = (spread - mu) / spread_std
         # x = (spread - mu) / SPREAD_SCALE
         # So x = z * spread_std / SPREAD_SCALE
-        spread_std = sigma * np.sqrt(1 / 24)  # Approximate hourly std from daily sigma
-
         return {
             "long_threshold": -self.z_threshold * spread_std / SPREAD_SCALE,
             "short_threshold": self.z_threshold * spread_std / SPREAD_SCALE,
@@ -279,11 +281,11 @@ def run_backtest(config: BacktestConfig) -> dict:
 
         mu = ou_params["mu"]
         theta = ou_params["theta"]
-        sigma = ou_params["sigma"]
+        spread_std = spread.std()  # Direct std for naive strategies
 
         print(
             f"Period {period + 1}/{num_periods}: "
-            f"θ={theta:.2f}, μ={mu:.4f}, σ={sigma:.4f}"
+            f"θ={theta:.2f}, μ={mu:.4f}, std={spread_std:.4f}"
         )
 
         # Train RL model
@@ -324,9 +326,9 @@ def run_backtest(config: BacktestConfig) -> dict:
             }
         )
 
-        # Get naive thresholds
-        naive_1sigma_thresholds = naive_1sigma.get_thresholds(sigma)
-        naive_2sigma_thresholds = naive_2sigma.get_thresholds(sigma)
+        # Get naive thresholds (using direct std from lookback)
+        naive_1sigma_thresholds = naive_1sigma.get_thresholds(spread_std)
+        naive_2sigma_thresholds = naive_2sigma.get_thresholds(spread_std)
 
         # Simulate trading for each strategy
         rl_results, positions["rl"], spreads["rl"] = simulate_period(
