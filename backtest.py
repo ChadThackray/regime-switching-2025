@@ -143,8 +143,9 @@ def simulate_period(
     thresholds: dict,
     mu: float,
     initial_position: int,
+    initial_spread: float | None,
     fee: float,
-) -> tuple[pd.DataFrame, int]:
+) -> tuple[pd.DataFrame, int, float]:
     """Simulate trading for one period using given thresholds.
 
     Args:
@@ -152,15 +153,17 @@ def simulate_period(
         thresholds: Dict with long_threshold and short_threshold
         mu: Equilibrium spread value
         initial_position: Starting regime (0=Long, 1=Short, 2=Flat)
+        initial_spread: Spread value from end of previous period (or None)
         fee: Trading fee per trade
 
     Returns:
         results: DataFrame with per-candle results
         final_position: Ending regime
+        final_spread: Spread value at end of period
     """
     results = []
     position = initial_position
-    prev_spread = None
+    prev_spread = initial_spread
 
     for row in prices.itertuples():
         spread = row.log_ratio
@@ -203,7 +206,7 @@ def simulate_period(
         position = target
         prev_spread = spread
 
-    return pd.DataFrame(results), position
+    return pd.DataFrame(results), position, prev_spread
 
 
 class NaiveStrategy:
@@ -247,8 +250,9 @@ def run_backtest(config: BacktestConfig) -> dict:
     all_results = {"rl": [], "naive_1sigma": [], "naive_2sigma": []}
     threshold_history = []
 
-    # Initial positions
+    # Initial positions and spreads
     positions = {"rl": 2, "naive_1sigma": 2, "naive_2sigma": 2}
+    spreads: dict[str, float | None] = {"rl": None, "naive_1sigma": None, "naive_2sigma": None}
 
     # Walk-forward loop
     lookback_candles = config.lookback_days * candles_per_day
@@ -325,20 +329,40 @@ def run_backtest(config: BacktestConfig) -> dict:
         naive_2sigma_thresholds = naive_2sigma.get_thresholds(sigma)
 
         # Simulate trading for each strategy
-        rl_results, positions["rl"] = simulate_period(
-            trading_data, rl_thresholds, mu, positions["rl"], config.fee
+        rl_results, positions["rl"], spreads["rl"] = simulate_period(
+            trading_data, rl_thresholds, mu, positions["rl"], spreads["rl"], config.fee
         )
         all_results["rl"].append(rl_results)
 
-        naive_1_results, positions["naive_1sigma"] = simulate_period(
-            trading_data, naive_1sigma_thresholds, mu, positions["naive_1sigma"], config.fee
+        naive_1_results, positions["naive_1sigma"], spreads["naive_1sigma"] = simulate_period(
+            trading_data, naive_1sigma_thresholds, mu, positions["naive_1sigma"], spreads["naive_1sigma"], config.fee
         )
         all_results["naive_1sigma"].append(naive_1_results)
 
-        naive_2_results, positions["naive_2sigma"] = simulate_period(
-            trading_data, naive_2sigma_thresholds, mu, positions["naive_2sigma"], config.fee
+        naive_2_results, positions["naive_2sigma"], spreads["naive_2sigma"] = simulate_period(
+            trading_data, naive_2sigma_thresholds, mu, positions["naive_2sigma"], spreads["naive_2sigma"], config.fee
         )
         all_results["naive_2sigma"].append(naive_2_results)
+
+    # Close final positions (add exit fee if not flat)
+    for strategy in ["rl", "naive_1sigma", "naive_2sigma"]:
+        if positions[strategy] != 2:  # Not flat
+            exit_fee = 2 * config.fee
+            # Get last timestamp from results
+            last_result = all_results[strategy][-1]
+            last_time = last_result["time"].iloc[-1] if not last_result.empty else None
+            # Append closing transaction
+            closing_row = pd.DataFrame([{
+                "time": last_time,
+                "spread": spreads[strategy],
+                "x_normalized": 0.0,  # Not meaningful for closing
+                "position": positions[strategy],
+                "target": 2,  # Close to flat
+                "pnl": 0.0,
+                "switch_cost": exit_fee,
+                "net_pnl": -exit_fee,
+            }])
+            all_results[strategy].append(closing_row)
 
     # Combine results
     combined = {
