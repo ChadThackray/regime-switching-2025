@@ -462,7 +462,7 @@ def plot_results(results: dict) -> None:
             )
 
     ax3.set_xlabel("Time")
-    ax3.set_ylabel("Normalized Spread")
+    ax3.set_ylabel("Normalized Spread  ((log(BTC/ETH) - μ) / scale)")
     ax3.set_title("RL Strategy Positions")
     ax3.legend()
     ax3.grid(True, alpha=0.3)
